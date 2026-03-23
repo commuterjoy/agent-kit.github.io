@@ -1,0 +1,157 @@
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import Papa from "papaparse";
+import { PDFDocument } from "pdf-lib";
+import JSZip from "jszip";
+
+export default function App() {
+  const [pdfFile, setPdfFile] = useState(null);
+  const [data, setData] = useState([]);
+  const [status, setStatus] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [isRunning, setIsRunning] = useState(false);
+  const [downloadUrl, setDownloadUrl] = useState(null);
+
+  const handleCsvUpload = (file) => {
+    Papa.parse(file, {
+      header: true,
+      complete: (results) => {
+        const cleaned = results.data.filter((row) =>
+          Object.values(row).some((v) => v)
+        );
+        setData(cleaned);
+        setStatus(`Loaded ${cleaned.length} rows`);
+      },
+    });
+  };
+
+  const generatePdfs = async () => {
+    if (!pdfFile || data.length === 0) {
+      setStatus("Upload PDF and data first");
+      return;
+    }
+
+    setIsRunning(true);
+    setProgress(0);
+    setStatus("Generating PDFs...");
+
+    const zip = new JSZip();
+    const pdfBytes = await pdfFile.arrayBuffer();
+
+    for (let i = 0; i < data.length; i++) {
+      const row = data[i];
+
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+      const form = pdfDoc.getForm();
+
+      Object.keys(row).forEach((key) => {
+        try {
+          const field = form.getTextField(key);
+          field.setText(String(row[key] || ""));
+        } catch (e) {}
+      });
+
+      const filledPdfBytes = await pdfDoc.save();
+      const fileName = `${row[Object.keys(row)[0]] || `output_${i + 1}`}.pdf`;
+
+      zip.file(fileName, filledPdfBytes);
+
+      const pct = Math.round(((i + 1) / data.length) * 100);
+      setProgress(pct);
+      setStatus(`Processing ${i + 1} of ${data.length}`);
+    }
+
+    setStatus("Zipping files...");
+
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+
+    const url = URL.createObjectURL(zipBlob);
+
+    // Instead of forcing download, expose a link (more reliable across browsers)
+    setDownloadUrl(url);
+
+    setStatus("Done. Click below to download.");
+    setIsRunning(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-xl space-y-6">
+        <div className="text-center space-y-2">
+          <h1 className="text-3xl font-semibold">PDF Bulk Filler</h1>
+          <p className="text-gray-500 text-sm">
+            Fill multiple PDFs from a spreadsheet — entirely in your browser.
+          </p>
+        </div>
+
+        <Card className="shadow-sm rounded-2xl">
+          <CardContent className="p-6 space-y-5">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">PDF Template</label>
+              <input
+                type="file"
+                accept="application/pdf"
+                className="block w-full text-sm"
+                onChange={(e) => setPdfFile(e.target.files[0])}
+              />
+              {pdfFile && (
+                <p className="text-xs text-gray-500">{pdfFile.name}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">CSV / TSV File</label>
+              <input
+                type="file"
+                accept=".csv,.tsv"
+                className="block w-full text-sm"
+                onChange={(e) => handleCsvUpload(e.target.files[0])}
+              />
+              {data.length > 0 && (
+                <p className="text-xs text-gray-500">
+                  {data.length} rows ready
+                </p>
+              )}
+            </div>
+
+            <Button
+              className="w-full"
+              onClick={generatePdfs}
+              disabled={isRunning}
+            >
+              {isRunning ? "Processing..." : "Generate & Download ZIP"}
+            </Button>
+
+            {isRunning && <Progress value={progress} />}
+
+            {status && (
+              <p className="text-sm text-gray-500 text-center">{status}</p>
+            )}
+
+            {downloadUrl && (
+              <Button
+                className="w-full"
+                onClick={() => {
+                  const a = document.createElement("a");
+                  a.href = downloadUrl;
+                  a.download = "filled_pdfs.zip";
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                }}
+              >
+                Download ZIP
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+
+        <p className="text-xs text-center text-gray-400">
+          All processing happens locally in your browser. No files are uploaded.
+        </p>
+      </div>
+    </div>
+  );
+}
